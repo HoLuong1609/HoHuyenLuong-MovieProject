@@ -2,5 +2,6 @@
     <string name="app_name">Movie</string>
     <string name="title">Title</string>
     <string name="status">…</string>
-    <string name="downloading">Downloading...</string>
+    <string name="downloading">Downloading…</string>
+    <string name="msg_downloading">%s downloading…</string>
 </resources>

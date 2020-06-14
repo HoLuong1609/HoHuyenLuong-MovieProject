@@ -1,24 +1,36 @@
 package com.project.movie
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.os.AsyncTask
 import android.os.Build
 import android.os.Bundle
+import android.view.View
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import com.google.gson.Gson
+import com.project.movie.Utils.bytes2String
 import com.project.movie.data.api.repsonse.MovieResponse
 import kotlinx.android.synthetic.main.activity_main.*
-import java.util.concurrent.*
+import java.util.*
+import java.util.concurrent.Executors
+import kotlin.math.roundToInt
 
-class MainActivity : AppCompatActivity(), OnDownloadListener {
 
-    private var mDownloadedKb = 0
+@Suppress("SameParameterValue")
+class MainActivity : AppCompatActivity(), OnDownloadListener, View.OnClickListener,
+    OnFetchDataListener {
+
+    private var mDownloadedBytes = 0
     private val mPathList = arrayListOf<String>()
     private var mPosition = 0
+    private var mFetchDataTask: FetchDataTask? = null
+    private var mResponse: MovieResponse? = null
 
+    @SuppressLint("NewApi")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -31,12 +43,7 @@ class MainActivity : AppCompatActivity(), OnDownloadListener {
                 REQUEST_PERMISSION_WRITE_EXTERNAL_STORAGE_SAVE_IMAGE
             )
         }
-        ivMovie.setOnClickListener {
-            if (mPathList.size > mPosition + 1) {
-                mPosition++
-                loadImage(mPathList[mPosition])
-            }
-        }
+        ivMovie.setOnClickListener(this)
     }
 
     override fun onRequestPermissionsResult(
@@ -48,59 +55,115 @@ class MainActivity : AppCompatActivity(), OnDownloadListener {
         if (requestCode == REQUEST_PERMISSION_WRITE_EXTERNAL_STORAGE_SAVE_IMAGE && grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
         ) {
             fetchData()
-            return
         }
     }
 
-    private fun fetchData() {
-        val dataStr =
-            "{'title':'Civil War','image':['http://movie.phinf.naver.net/20151127_272/1448585271749MCMVs_JPEG/movie_image.jpg?type=m665_443_2','http://movie.phinf.naver.net/20151127_84/1448585272016tiBsF_JPEG/movie_image.jpg?type=m665_443_2','http://movie.phinf.naver.net/20151125_36/1448434523214fPmj0_JPEG/movie_image.jpg?type=m665_443_2']}"
-        val response = Gson().fromJson(dataStr, MovieResponse::class.java)
-        onHandleResponse(response)
+    override fun onDestroy() {
+        super.onDestroy()
+        if (mFetchDataTask?.status != AsyncTask.Status.FINISHED) {
+            mFetchDataTask?.cancel(true)
+        }
     }
 
-    private fun onHandleResponse(response: MovieResponse) {
+    override fun onClick(v: View) {
+        when (v.id) {
+            R.id.ivMovie -> {
+                if (mPathList.size > mPosition + 1) {
+                    mPosition++
+                    loadImage(mPathList[mPosition])
+                }
+            }
+        }
+    }
+
+    override fun onResponse(response: MovieResponse) {
+        mResponse = response
         tvTitle.text = response.title
         val numberOfThread = 10
         val executor = Executors.newFixedThreadPool(numberOfThread)
-        val service = ExecutorCompletionService<String>(executor)
-        val callables = arrayListOf<Callable<String>>()
         val imageUrlList = response.image ?: listOf()
         for (index in imageUrlList.indices) {
-            callables.add(DownloadImageCallable(imageUrlList[index], this))
+            val downloadImageRunnable = DownloadImageRunnable(imageUrlList[index], this)
+            executor.execute(downloadImageRunnable)
         }
-        for (callable in callables) {
-            service.submit(callable)
-        }
-        var future = service.take()
-        mPathList.add(future.get())
-        future = service.take()
-        mPathList.add(future.get())
-        future = service.take()
-        mPathList.add(future.get())
-        onAllImageDownloaded()
+        executor.shutdown()
+    }
+
+    private fun fetchData() {
+        mFetchDataTask = FetchDataTask(this)
+        mFetchDataTask?.execute()
     }
 
     override fun onStartDownload() {
         tvStatus.text = getString(R.string.downloading)
     }
 
-    override fun onProgress(downloadedKb: Int) {
-        mDownloadedKb += downloadedKb
-        tvStatus.text = "$mDownloadedKb Kb downloading"
+    override fun onProgress(downloadedBytes: Int) {
+        mDownloadedBytes += downloadedBytes
+        runOnUiThread {
+            tvStatus.text = String.format(
+                Locale.getDefault(),
+                getString(R.string.msg_downloading),
+                bytes2String(mDownloadedBytes.toLong())
+            )
+        }
     }
 
     override fun onFailed(e: Exception?) {
-        tvStatus.text = e?.message
+        runOnUiThread {
+            tvStatus.text = e?.message
+        }
     }
 
-    private fun onAllImageDownloaded() {
-        loadImage(mPathList[0])
+    override fun onDownloadCompleted(path: String) {
+        mPathList.add(path)
+        if (mPathList.size == mResponse?.image?.size) {
+            runOnUiThread {
+                loadImage(mPathList[0])
+            }
+        }
     }
 
     private fun loadImage(path: String) {
-        val myBitmap = BitmapFactory.decodeFile(path)
-        ivMovie.setImageBitmap(myBitmap)
+        val width = resources.displayMetrics.widthPixels - Utils.dpToPx(this, 30f * 2)
+        ivMovie.setImageBitmap(
+            decodeSampledBitmapFromFile(
+                path,
+                width.toInt(),
+                (width * 310 / 443).toInt()
+            )
+        )
+    }
+
+    private fun decodeSampledBitmapFromFile(
+        path: String?,
+        reqWidth: Int, reqHeight: Int
+    ): Bitmap? { // BEST QUALITY MATCH
+
+        // First decode with inJustDecodeBounds=true to check dimensions
+        val options = BitmapFactory.Options()
+        options.inJustDecodeBounds = true
+        BitmapFactory.decodeFile(path, options)
+
+        // Calculate inSampleSize
+        // Raw height and width of image
+        val height = options.outHeight
+        val width = options.outWidth
+        options.inPreferredConfig = Bitmap.Config.RGB_565
+        var inSampleSize = 1
+        if (height > reqHeight) {
+            inSampleSize = (height.toFloat() / reqHeight.toFloat()).roundToInt()
+        }
+        val expectedWidth = width / inSampleSize
+        if (expectedWidth > reqWidth) {
+            //if(Math.round((float)width / (float)reqWidth) > inSampleSize) // If bigger SampSize..
+            inSampleSize = (width.toFloat() / reqWidth.toFloat()).roundToInt()
+        }
+        options.inSampleSize = inSampleSize
+
+        // Decode bitmap with inSampleSize set
+        options.inJustDecodeBounds = false
+        return BitmapFactory.decodeFile(path, options)
     }
 
     private fun checkPermission(permission: String?): Boolean {

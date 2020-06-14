@@ -1,8 +1,6 @@
 package com.project.movie
 
 import android.os.Environment
-import android.os.Handler
-import android.os.Looper
 import android.text.TextUtils
 import android.webkit.URLUtil
 import java.io.BufferedInputStream
@@ -12,20 +10,18 @@ import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.*
-import java.util.concurrent.Callable
 
-class DownloadImageCallable(
-                            private val urlStr: String,
-                            private val downloadListener: OnDownloadListener
-) : Callable<String> {
-    override fun call(): String {
+class DownloadImageRunnable(
+    private val urlStr: String,
+    private val downloadListener: OnDownloadListener
+) : Runnable {
+    override fun run() {
+        var filePath = ""
         var fos: FileOutputStream? = null
         var inputStream: BufferedInputStream? = null
         try {
-            updateStatus { downloadListener.onStartDownload() }
             val url = URL(urlStr)
             val connection: HttpURLConnection = url.openConnection() as HttpURLConnection
-            var totalDataRead = 0f
             inputStream = BufferedInputStream(connection.inputStream)
             inputStream.use { `in` ->
                 val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
@@ -36,30 +32,25 @@ class DownloadImageCallable(
                 fos = FileOutputStream(file)
                 BufferedOutputStream(fos!!, 1024).use { bout ->
                     val data = ByteArray(1024)
-                    var i: Int
-                    while (`in`.read(data, 0, 1024).also { i = it } >= 0) {
-                        totalDataRead += i
-                        updateStatus { downloadListener.onProgress(totalDataRead.toInt()) }
-                        bout.write(data, 0, i)
+                    var read: Int
+                    while (`in`.read(data, 0, 1024).also { read = it } >= 0) {
+                        downloadListener.onProgress(read)
+                        bout.write(data, 0, read)
                     }
-                    return file.path
+                    filePath = file.path
                 }
             }
         } catch (ex: Exception) {
-            updateStatus { downloadListener.onFailed(ex) }
+            downloadListener.onFailed(ex)
         } finally {
             inputStream?.close()
             fos?.close()
         }
-        return ""
-    }
-
-    private fun updateStatus(function: () -> Unit) {
-        Handler(Looper.getMainLooper()).post { function.invoke() }
+        downloadListener.onDownloadCompleted(filePath)
     }
 
     private fun getFileName(url: String): String {
-        var fileName = ""
+        var fileName: String
         val calendar = Calendar.getInstance()
         val currentTime = calendar.timeInMillis
         try {
