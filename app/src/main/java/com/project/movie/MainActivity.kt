@@ -5,22 +5,18 @@ import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.google.gson.Gson
 import com.project.movie.data.api.repsonse.MovieResponse
 import kotlinx.android.synthetic.main.activity_main.*
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
+import java.util.concurrent.*
 
-
-class MainActivity : AppCompatActivity(), DownloadImageThread.OnDownloadListener {
+class MainActivity : AppCompatActivity(), OnDownloadListener {
 
     private var mDownloadedKb = 0
     private val mPathList = arrayListOf<String>()
-    private var mResponse: MovieResponse? = null
     private var mPosition = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -60,19 +56,29 @@ class MainActivity : AppCompatActivity(), DownloadImageThread.OnDownloadListener
         val dataStr =
             "{'title':'Civil War','image':['http://movie.phinf.naver.net/20151127_272/1448585271749MCMVs_JPEG/movie_image.jpg?type=m665_443_2','http://movie.phinf.naver.net/20151127_84/1448585272016tiBsF_JPEG/movie_image.jpg?type=m665_443_2','http://movie.phinf.naver.net/20151125_36/1448434523214fPmj0_JPEG/movie_image.jpg?type=m665_443_2']}"
         val response = Gson().fromJson(dataStr, MovieResponse::class.java)
-        mResponse = response
-        onResponse(response)
+        onHandleResponse(response)
     }
 
-    private fun onResponse(response: MovieResponse) {
+    private fun onHandleResponse(response: MovieResponse) {
+        tvTitle.text = response.title
         val numberOfThread = 10
-        val executor: ExecutorService = Executors.newFixedThreadPool(numberOfThread)
+        val executor = Executors.newFixedThreadPool(numberOfThread)
+        val service = ExecutorCompletionService<String>(executor)
+        val callables = arrayListOf<Callable<String>>()
         val imageUrlList = response.image ?: listOf()
         for (index in imageUrlList.indices) {
-            val downloadImageThread = DownloadImageThread(imageUrlList[index], this)
-            executor.execute(downloadImageThread)
+            callables.add(DownloadImageCallable(imageUrlList[index], this))
         }
-        executor.shutdown()
+        for (callable in callables) {
+            service.submit(callable)
+        }
+        var future = service.take()
+        mPathList.add(future.get())
+        future = service.take()
+        mPathList.add(future.get())
+        future = service.take()
+        mPathList.add(future.get())
+        onAllImageDownloaded()
     }
 
     override fun onStartDownload() {
@@ -81,14 +87,7 @@ class MainActivity : AppCompatActivity(), DownloadImageThread.OnDownloadListener
 
     override fun onProgress(downloadedKb: Int) {
         mDownloadedKb += downloadedKb
-        tvStatus.text = "$mDownloadedKb Kb downloaded"
-    }
-
-    override fun onCompleted(filePath: String) {
-        mPathList.add(filePath)
-        if (mPathList.size == mResponse?.image?.size) {
-            onAllImageDownloaded()
-        }
+        tvStatus.text = "$mDownloadedKb Kb downloading"
     }
 
     override fun onFailed(e: Exception?) {

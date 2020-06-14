@@ -12,13 +12,13 @@ import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.*
+import java.util.concurrent.Callable
 
-class DownloadImageThread(
-    private val urlStr: String,
-    private val downloadListener: OnDownloadListener
-) :
-    Runnable {
-    override fun run() {
+class DownloadImageCallable(
+                            private val urlStr: String,
+                            private val downloadListener: OnDownloadListener
+) : Callable<String> {
+    override fun call(): String {
         var fos: FileOutputStream? = null
         var inputStream: BufferedInputStream? = null
         try {
@@ -42,7 +42,7 @@ class DownloadImageThread(
                         updateStatus { downloadListener.onProgress(totalDataRead.toInt()) }
                         bout.write(data, 0, i)
                     }
-                    updateStatus { downloadListener.onCompleted(file.path) }
+                    return file.path
                 }
             }
         } catch (ex: Exception) {
@@ -51,6 +51,7 @@ class DownloadImageThread(
             inputStream?.close()
             fos?.close()
         }
+        return ""
     }
 
     private fun updateStatus(function: () -> Unit) {
@@ -70,12 +71,5 @@ class DownloadImageThread(
             fileName = "$currentTime.jpg"
         }
         return fileName
-    }
-
-    interface OnDownloadListener {
-        fun onStartDownload()
-        fun onProgress(downloadedKb: Int)
-        fun onCompleted(filePath: String)
-        fun onFailed(e: Exception?)
     }
 }
